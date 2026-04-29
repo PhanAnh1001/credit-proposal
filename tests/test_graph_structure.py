@@ -10,37 +10,39 @@ class TestRouteAfterReview:
         self.route = route_after_review
 
     def test_high_score_goes_to_end(self):
-        state = {"quality_review_result": {"score": 8}, "retry_count": 1}
-        result = self.route(state)
-        assert result == "END" or result.__class__.__name__ == "str"
-
-    def test_retry_count_exceeded_goes_to_end(self):
-        # retry_count >= 2 → END regardless of score
-        state = {"quality_review_result": {"score": 5, "financial_quality": 4, "sector_quality": 6}, "retry_count": 2}
+        state = {
+            "quality_review_result": {"score": 8},
+            "retry_count": 1,
+            "verification_summary": {"low_confidence_count": 0},
+        }
         result = self.route(state)
         from langgraph.graph import END
         assert result == END
 
+    def test_retry_count_exceeded_escalates_to_human(self):
+        # retry_count >= 2 and score < 7 → human_escalation (not END)
+        state = {
+            "quality_review_result": {"score": 5, "financial_quality": 4, "sector_quality": 6},
+            "retry_count": 2,
+            "verification_summary": {"low_confidence_count": 0},
+        }
+        result = self.route(state)
+        assert result == "human_escalation"
+
     def test_low_financial_quality_routes_to_financial(self):
         state = {
-            "quality_review_result": {
-                "score": 5,
-                "financial_quality": 4,
-                "sector_quality": 7,
-            },
+            "quality_review_result": {"score": 5, "financial_quality": 4, "sector_quality": 7},
             "retry_count": 0,
+            "verification_summary": {"low_confidence_count": 0},
         }
         result = self.route(state)
         assert result == "analyze_financial"
 
     def test_low_sector_quality_routes_to_sector(self):
         state = {
-            "quality_review_result": {
-                "score": 5,
-                "financial_quality": 8,
-                "sector_quality": 4,
-            },
+            "quality_review_result": {"score": 5, "financial_quality": 8, "sector_quality": 4},
             "retry_count": 0,
+            "verification_summary": {"low_confidence_count": 0},
         }
         result = self.route(state)
         assert result == "analyze_sector"
@@ -48,19 +50,30 @@ class TestRouteAfterReview:
     def test_financial_worse_routes_to_financial(self):
         # financial_quality ≤ sector_quality and financial < 7
         state = {
-            "quality_review_result": {
-                "score": 5,
-                "financial_quality": 5,
-                "sector_quality": 6,
-            },
+            "quality_review_result": {"score": 5, "financial_quality": 5, "sector_quality": 6},
             "retry_count": 0,
+            "verification_summary": {"low_confidence_count": 0},
         }
         result = self.route(state)
         assert result == "analyze_financial"
 
+    def test_low_confidence_claims_escalates(self):
+        # low_confidence_count > 3 → human_escalation even with good score
+        state = {
+            "quality_review_result": {"score": 8},
+            "retry_count": 0,
+            "verification_summary": {"low_confidence_count": 4},
+        }
+        result = self.route(state)
+        assert result == "human_escalation"
+
     def test_missing_review_result_goes_to_end(self):
         # Default score=10 when missing → END
-        state = {"quality_review_result": None, "retry_count": 0}
+        state = {
+            "quality_review_result": None,
+            "retry_count": 0,
+            "verification_summary": {"low_confidence_count": 0},
+        }
         from langgraph.graph import END
         result = self.route(state)
         assert result == END

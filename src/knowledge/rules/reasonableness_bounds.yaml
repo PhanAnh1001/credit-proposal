@@ -1,0 +1,51 @@
+# Reasonableness bounds for anomaly detection
+# Used by circuit breaker and multi-layer verifier
+
+financial_data:
+  # Fields that must not be zero/None after extraction
+  required_nonzero:
+    - total_assets
+    - equity
+    - net_revenue
+  required_nonzero_note: "Nếu các field này = 0 hoặc None sau OCR → circuit breaker trip"
+
+  # Minimum years required
+  min_years_required: 1
+  preferred_years: 3
+
+  # Balance sheet tolerance
+  balance_sheet_tolerance_pct: 2.0
+  note: "total_assets phải ≈ total_liabilities + equity với ±2% tolerance"
+
+  # YoY change limits (outside these = suspicious, circuit breaker warn)
+  yoy_warn_thresholds:
+    revenue_growth_pct_max: 500.0
+    revenue_growth_pct_min: -80.0
+    asset_growth_pct_max: 300.0
+    profit_swing_from_positive_to_loss: true   # warn nếu net_profit đột ngột âm sâu
+
+sector_analysis:
+  # Minimum length for sector section (chars)
+  min_section_length: 200
+  # Must mention at least N risks
+  min_risk_count: 2
+
+company_info:
+  # Tax code format (Vietnam MST)
+  tax_code_pattern: "^\\d{10}(-\\d{3})?$"
+  # Shareholders: at least 1 with positive percentage
+  min_shareholders: 0  # 0 = không bắt buộc, chỉ warn
+  # Established date must not be in the future
+  established_date_future_check: true
+
+nhnn_regulations:
+  # Stub — actual regulations require legal team review
+  # Circular 11/2021: loan classification (Groups 1-5)
+  # Circular 39/2016: lending regulations
+  stub_note: "Regulatory rules require legal team to implement. These are placeholders."
+  debt_classification_groups:
+    group_1_standard: "Nợ đủ tiêu chuẩn — quá hạn < 10 ngày"
+    group_2_attention: "Nợ cần chú ý — quá hạn 10-90 ngày"
+    group_3_substandard: "Nợ dưới tiêu chuẩn — quá hạn 91-180 ngày"
+    group_4_doubtful: "Nợ nghi ngờ — quá hạn 181-360 ngày"
+    group_5_loss: "Nợ có khả năng mất vốn — quá hạn > 360 ngày"

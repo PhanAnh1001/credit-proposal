@@ -1,14 +1,10 @@
-# AI Agent Tạo Tờ Trình Tín Dụng
+# AI Credit Proposal Agent
 
-AI Agent tự động tạo tờ trình thẩm định tín dụng từ báo cáo tài chính doanh nghiệp.
+Automated AI agent that generates credit appraisal memos from corporate financial statements.
 
-> English version: [README.en.md](README.en.md)
+> Vietnamese version: [README.md](README.md)
 
-## Tổng quan
-
-Hệ thống sử dụng **LangGraph** để orchestrate một multi-agent pipeline gồm 3 subgraph chính chạy song song, kèm vòng lặp tự sửa lỗi và cơ chế escalation lên cán bộ thẩm định:
-
-The system uses **LangGraph** to orchestrate a multi-agent pipeline with 3 main subgraphs running sequentially and in parallel, with a self-correction loop:
+The system uses **LangGraph** to orchestrate a multi-agent pipeline with 3 main subgraphs running in parallel, a self-correction loop, and a human escalation pathway when AI confidence is insufficient:
 
 1. **Subgraph 1 — Company Info**: Reads a Markdown file → LLM extracts structured data (few-shot prompting)
 2. **Subgraph 2 — Sector Analysis**: Web search (Tavily) + LLM synthesizes industry assessment (Chain-of-Thought)
@@ -136,16 +132,16 @@ credit-proposal/
 ```
 User Input (PDF + MD)
        │
-extract_company_info          ← Subgraph 1 (circuit breaker + validation)
+extract_company_info          ← Subgraph 1 (circuit breaker + validation gate)
    /            \
-analyze_sector  analyze_financial   ← Subgraph 2 & 3 chạy song song (parallel fan-out)
-   \            /                     (circuit breaker + validation trong mỗi node)
+analyze_sector  analyze_financial   ← Subgraph 2 & 3 run in parallel (fan-out)
+   \            /                     (each has its own circuit breaker + validation)
   assemble_report              ← fan-in + multi-layer verifier (4 layers)
        │
   quality_review               ← LLM-as-Judge + per-claim confidence scoring
    /    |    \
- END  retry  human_escalation  ← tối đa 1 retry; escalate nếu score<7 sau retry
-                                   hoặc low-confidence claims > 3
+ END  retry  human_escalation  ← max 1 retry; escalate if score < 7 after retry
+                                   or low-confidence claims > 3
 ```
 
 **Parallel fan-out**: `analyze_sector` and `analyze_financial` are independent and run concurrently.
@@ -154,11 +150,10 @@ Shared fields use `Annotated` reducers to prevent `InvalidUpdateError`:
 - `errors`, `messages` — `Annotated[list, add]`: parallel branches append safely
 - `current_step` — `Annotated[str, lambda a, b: b]`: last-write-wins, since both nodes write this field in the same step
 
-**Self-correction loop**: `quality_review_node` chấm điểm từng output (0-10).
-Nếu điểm < 7, `route_after_review()` re-run node yếu nhất với `quality_feedback` được inject vào prompt.
-Tối đa 1 lần retry.
+**Self-correction loop**: `quality_review_node` scores each output section (0–10).
+If the overall score is below 7, `route_after_review()` re-runs the weakest node with `quality_feedback` injected into its prompt — making the retry targeted rather than blind. Maximum 1 retry.
 
-**Human escalation**: Nếu score < 7 sau retry, hoặc phát hiện > 3 low-confidence claims từ verifier, pipeline escalate lên `human_escalation` node — tạo báo cáo markdown có cấu trúc để cán bộ thẩm định xử lý thủ công.
+**Human escalation**: If the score remains below 7 after a retry, or more than 3 low-confidence claims are detected by the verifier, the pipeline routes to `human_escalation` — generating a structured Markdown report that lists unresolved issues for a credit analyst to handle manually.
 
 ### Tools
 
@@ -171,21 +166,21 @@ Tối đa 1 lần retry.
 
 ### Memory & State
 
-Sử dụng `AgentState` TypedDict của LangGraph làm short-term memory trong 1 session:
-- Run identity: `run_id` (UUID4) — nhóm tất cả audit events và checkpoints
-- Input: `company_name`, `md_company_info_path`, `pdf_dir_path`, `output_dir`
-- Intermediate: `company_info`, `sector_info`, `financial_data`
-- Sections: `section_1_company`, `section_2_sector`, `section_3_financial`
-- Output: `final_report_md`, `final_report_docx_path`, `final_report_memo_docx_path`
-- Quality loop: `retry_count`, `quality_review_result`, `quality_feedback`
-- Verification: `claim_verifications` (per-claim confidence), `verification_summary` (aggregate)
-- Escalation: `escalation_report` (markdown report khi AI escalate lên human)
-- Control: `errors` (Annotated `add`), `messages` (Annotated `add`), `current_step` (Annotated last-write-wins)
+`AgentState` TypedDict serves as short-term memory within a single session:
+- **Run identity**: `run_id` (UUID4) — groups all audit events and checkpoints
+- **Input**: `company_name`, `md_company_info_path`, `pdf_dir_path`, `output_dir`
+- **Intermediate**: `company_info`, `sector_info`, `financial_data`
+- **Sections**: `section_1_company`, `section_2_sector`, `section_3_financial`
+- **Output**: `final_report_md`, `final_report_docx_path`, `final_report_memo_docx_path`
+- **Quality loop**: `retry_count`, `quality_review_result`, `quality_feedback`
+- **Verification**: `claim_verifications` (per-claim confidence), `verification_summary` (aggregate)
+- **Escalation**: `escalation_report` (Markdown summary when AI escalates to human)
+- **Control**: `errors` (Annotated `add`), `messages` (Annotated `add`), `current_step` (Annotated last-write-wins)
 
-**Persistent state ngoài session**:
-- OCR cache: `data/cache/ocr/{company}/{year}/` — tránh re-OCR PDF
-- Node checkpoints: `data/checkpoints/{run_id}/` — JSON snapshot sau mỗi node quan trọng
-- Audit trail: `logs/audit_YYYYMMDD.jsonl` — structured events theo `run_id`
+**Persistent state across sessions**:
+- OCR cache: `data/cache/ocr/{company}/{year}/` — avoids re-OCRing PDFs on subsequent runs
+- Node checkpoints: `data/checkpoints/{run_id}/` — JSON snapshots after each key node
+- Audit trail: `logs/audit_YYYYMMDD.jsonl` — structured events keyed by `run_id`
 
 ### PDF Extraction Pipeline
 
@@ -198,9 +193,9 @@ Financial statement PDFs are often scanned image files. The pipeline processes t
 2. **markitdown** — broad format support
 3. **TOC-guided Vision LLM OCR** — for scanned PDFs:
    - **Image preprocessing** before each page: grayscale → auto-contrast → contrast ×2.0 → sharpness ×2.5 → UnsharpMask; improves OCR on blurry or low-quality scans
-   - Renders at zoom 2.0× (~144 DPI, up from 1.5×) to preserve detail in small figures
+   - Renders at zoom 2.0× (~144 DPI) to preserve detail in small figures
    - Reads table of contents (pages 2–3) to locate balance sheet / income statement / cash flow start pages
-   - OCRs only relevant pages (not the full 100-page document)
+   - OCRs only the relevant pages, not the full document
    - Results cached at `data/cache/ocr/`
 4. **pdfplumber** — final fallback
 
@@ -214,20 +209,20 @@ Each node uses a dedicated model — no model is shared across two functions:
 | Subgraph 2 — Sector synthesis | `openai/gpt-oss-120b` | 8K | 1K | Separate OpenAI bucket from SG3; max_tokens=4096 (~6.4K total, fits 120b window) |
 | Subgraph 3 — Financial parse + narrative | `llama-3.3-70b-versatile` | **12K** | 1K | Highest TPM → heaviest task (~79K tokens/run); 128K context; separate Meta bucket |
 | PDF — TOC parsing | `llama-3.1-8b-instant` | 6K | 14.4K | Small input (≤1K chars), high RPD — preserves quota of 1K-RPD models |
-| PDF — Vision OCR | `llama-4-scout-17b-16e` | 30K | 1K | Only model used for image input; OCR cache reduces RPD usage |
+| PDF — Vision OCR | `llama-4-scout-17b-16e` | 30K | 1K | Only model with image input support; OCR cache reduces RPD usage |
 | Quality review (LLM-as-Judge) | `openai/gpt-oss-20b` | 8K | 1K | max_tokens=2048; QR input ~1.3K → 3.3K total, fits ~8K window; OpenAI vendor |
 
-> **Allocation principle**: Each function uses exactly one dedicated model. Highest TPM (`llama-3.3-70b`, 12K) → heaviest task (SG3 ~79K tokens/run). SG2 and SG3 run in parallel using separate TPM buckets (OpenAI vs Meta) to avoid 429 errors.
+> **Allocation principle**: Each function uses exactly one dedicated model. Highest TPM (`llama-3.3-70b`, 12K) goes to the heaviest task (SG3, ~79K tokens/run). SG2 and SG3 run in parallel using separate TPM buckets (OpenAI vs Meta) to avoid 429 rate limit errors.
 >
-> **RPD strategy**: `llama-3.1-8b-instant` (14.4K RPD) handles TOC parsing to preserve quota of 1K-RPD models. All remaining 1K-RPD models are sufficient for demo usage (≤10 runs/day).
+> **RPD strategy**: `llama-3.1-8b-instant` (14.4K RPD) handles TOC parsing to preserve the 1K-RPD quota of larger models. All 1K-RPD models are sufficient for demo usage (≤10 runs/day).
 >
-> **LLM-as-Judge**: `openai/gpt-oss-20b` — same OpenAI vendor as SG2 (`gpt-oss-120b`) but different model size; fully independent from SG1 (Qwen) and SG3 (Meta). max_tokens=2048 sufficient for complete scoring JSON.
+> **LLM-as-Judge independence**: `openai/gpt-oss-20b` is the same vendor as SG2 (`gpt-oss-120b`) but a different model size; fully independent from SG1 (Qwen) and SG3 (Meta).
 
 ### Prompting Techniques
 
-- **Chain-of-Thought (CoT)**: Financial and sector analysis nodes use prompts that require LLM reasoning through 5 explicit steps before drawing conclusions
+- **Chain-of-Thought (CoT)**: Financial and sector analysis nodes require the LLM to reason through 5 explicit steps before drawing conclusions
 - **Few-shot examples**: `company_info.py` provides one complete input→output JSON example for LLM format calibration
-- **Quality feedback injection**: On retry, `quality_feedback` (top-3 issues from the reviewer) is injected into the re-run node's prompt
+- **Quality feedback injection**: On retry, the top-3 issues identified by the reviewer are filtered to match the section being retried and injected into the re-run node's prompt
 
 ## Financial Ratios Calculated
 
@@ -243,25 +238,25 @@ Each node uses a dedicated model — no model is shared across two functions:
 | Gross Profit Margin | Gross Profit / Net Revenue × 100% |
 | Revenue Growth YoY | (Revenue Year N − Revenue Year N-1) / Revenue Year N-1 × 100% |
 
-## Guardrails và chất lượng
+## Guardrails & Quality Controls
 
-| Lớp | Cơ chế | Khi nào |
-|-----|--------|---------|
-| **Circuit breaker** | Kiểm tra `total_assets=0`, sector text < 200 chars, company_name rỗng | Sau mỗi subgraph |
-| **Validation gate** | Pure Python: tax_code regex, shareholders%, established_date | Sau extract/analyze |
-| **Domain knowledge** | YAML thresholds (current_ratio, D/E, ROE theo ngành) | Trong multi-layer verifier |
-| **Multi-layer verifier** | 4 layers: syntax → domain → regulatory → reasonableness | Trong assemble_report |
-| **LLM-as-Judge** | `gpt-oss-20b` (OpenAI) đánh giá output SG1(Qwen) + SG3(Meta) | Sau assemble_report |
-| **Per-claim confidence** | `ClaimVerification` model: confidence 0.0–1.0 per claim | Trong quality_review |
-| **Human escalation** | Báo cáo markdown chi tiết khi AI không đủ confidence | Khi score<7 after retry hoặc low-conf claims>3 |
+| Layer | Mechanism | When |
+|-------|-----------|------|
+| **Circuit breaker** | Checks `total_assets=0`, sector text < 200 chars, empty `company_name` | After each subgraph |
+| **Validation gate** | Pure Python: tax code regex, shareholder percentage, established date not in future | After extract/analyze |
+| **Domain knowledge** | YAML thresholds (current_ratio, D/E, ROE by industry sector) | Inside multi-layer verifier |
+| **Multi-layer verifier** | 4 layers: syntax → domain → regulatory → reasonableness | Inside assemble_report |
+| **LLM-as-Judge** | `gpt-oss-20b` (OpenAI) scores output from SG1 (Qwen) + SG3 (Meta) | After assemble_report |
+| **Per-claim confidence** | `ClaimVerification` model: confidence 0.0–1.0 per claim type | Inside quality_review |
+| **Human escalation** | Structured Markdown report when AI confidence is insufficient | When score < 7 after retry or low-confidence claims > 3 |
 
-## Lưu ý
+## Notes
 
-- **Bảo mật**: Không commit API keys vào git. Dùng file `.env` (đã có trong `.gitignore`)
-- **Chi phí**: Groq free tier đủ cho demo (14,400 req/ngày). Tavily free tier 1,000 req/tháng
-- **Hallucination**: Số liệu tài chính được trích xuất từ PDF gốc và tính bằng Python thuần. LLM chỉ được dùng số liệu từ context, không được bịa
-- **PDF scan**: Nếu PDF là ảnh scan, cần Groq vision model có quyền truy cập
-- **Audit trail**: Tất cả events được ghi vào `logs/audit_YYYYMMDD.jsonl` theo `run_id` để debug và review
+- **Security**: Never commit API keys to git. Use the `.env` file (already in `.gitignore`)
+- **Cost**: Groq free tier is sufficient for demo purposes (14,400 requests/day). Tavily free tier: 1,000 requests/month
+- **Hallucination prevention**: Financial figures are extracted directly from the source PDFs and calculated in pure Python. The LLM is only allowed to use numbers from the provided context — no fabrication
+- **Scanned PDFs**: If the PDF is a scanned image, the Groq vision model is required (controlled by `OCR_ONLINE_DISABLED` env flag)
+- **Audit trail**: All pipeline events are written to `logs/audit_YYYYMMDD.jsonl` keyed by `run_id` for debugging and review
 
 ## Running Tests
 
