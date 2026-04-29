@@ -9,7 +9,9 @@ dist/
 build/
 .pytest_cache/
 .langsmith/
-logs/*
-data/cache/*
-data/outputs/*
-data/uploads/*
+logs/
+data/cache/
+data/outputs/
+data/checkpoints/
+ete-evidence/*
+!ete-evidence/.gitkeep

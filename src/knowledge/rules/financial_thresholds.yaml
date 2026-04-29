@@ -1,0 +1,79 @@
+# Financial thresholds by industry sector
+# Source: general banking industry guidelines (Vietnam context)
+# Note: NHNN-specific thresholds (Circular 11/2021, Circular 39/2016) require legal team review
+
+defaults:
+  current_ratio:
+    min_acceptable: 1.0
+    healthy: 1.5
+    max_suspicious: 20.0
+    note: "Tỷ số thanh toán hiện hành. > 20 có thể là data entry error."
+  quick_ratio:
+    min_acceptable: 0.5
+    healthy: 1.0
+  debt_to_equity:
+    max_acceptable: 3.0
+    healthy_max: 1.5
+    note: "D/E > 3.0 là highly leveraged, rủi ro cao"
+  debt_to_assets:
+    max_acceptable: 0.8
+    healthy_max: 0.6
+  roe:
+    min_acceptable: 0.0    # percent
+    healthy_min: 10.0
+    note: "ROE < 0 là thua lỗ"
+  roa:
+    min_acceptable: 0.0    # percent
+    healthy_min: 3.0
+  net_profit_margin:
+    min_acceptable: -50.0  # percent
+    note: "Âm sâu hơn -50% là bất thường"
+  gross_profit_margin:
+    min_acceptable: 0.0    # percent
+    note: "Gross margin âm = bán dưới giá vốn"
+  revenue_growth_yoy:
+    max_suspicious: 500.0  # percent — potential hallucination nếu vượt ngưỡng này
+    min_suspicious: -80.0  # percent — doanh thu giảm >80% một năm là bất thường
+
+sectors:
+  manufacturing:  # sản xuất
+    current_ratio:
+      healthy: 1.5
+    debt_to_equity:
+      healthy_max: 1.5
+    roe:
+      healthy_min: 8.0
+
+  retail:  # bán lẻ / thương mại
+    current_ratio:
+      healthy: 1.2
+      note: "Bán lẻ thường có current ratio thấp hơn do inventory quay vòng nhanh"
+    debt_to_equity:
+      healthy_max: 2.0
+    roe:
+      healthy_min: 12.0
+
+  construction:  # xây dựng
+    current_ratio:
+      healthy: 1.3
+    debt_to_equity:
+      healthy_max: 2.5
+      note: "Xây dựng thường có leverage cao hơn"
+    roe:
+      healthy_min: 8.0
+
+  real_estate:  # bất động sản
+    current_ratio:
+      healthy: 1.2
+    debt_to_equity:
+      healthy_max: 3.0
+    roe:
+      healthy_min: 10.0
+
+  services:  # dịch vụ
+    current_ratio:
+      healthy: 1.2
+    debt_to_equity:
+      healthy_max: 1.0
+    roe:
+      healthy_min: 15.0

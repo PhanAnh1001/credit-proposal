@@ -6,9 +6,14 @@ from ..models.financial import FinancialData, FinancialStatement, FinancialRatio
 from ..utils.llm import get_financial_llm
 from ..utils.logger import get_logger, timed_node
 from ..utils.ocr_cache import OcrCache
+from ..utils.circuit_breaker import CircuitBreaker
+from ..utils.checkpoint import save_node_checkpoint
+from ..utils.audit import get_audit_logger
+from ..utils.validation import validate_financial_output
 from langchain_core.messages import HumanMessage, SystemMessage
 
 _cache = OcrCache()
+_breaker = CircuitBreaker()
 
 logger = get_logger("subgraph3")
 
@@ -61,6 +66,40 @@ def analyze_financial_node(state: AgentState) -> dict:
             ratios[year] = FinancialRatios(**ratio_dict)
 
         financial_data = FinancialData(statements=statements, ratios=ratios)
+
+        # Circuit breaker: check for anomalous financial data before generating narrative
+        run_id = state.get("run_id", "unknown")
+        audit = get_audit_logger(run_id)
+        cb_result = _breaker.check_financial(financial_data, list(statements.keys()))
+        if cb_result.tripped:
+            audit.circuit_breaker_trip("analyze_financial", cb_result.reason)
+            return {
+                "errors": [f"[circuit_breaker] {cb_result.reason}"],
+                "current_step": "circuit_breaker_trip"
+            }
+        if cb_result.warnings:
+            audit.circuit_breaker_warn("analyze_financial", cb_result.warnings)
+        for w in cb_result.warnings:
+            validation_warnings.append(w)
+
+        # Cross-agent validation gate
+        sector = getattr(state.get("company_info"), "main_business", None)
+        val_failures = validate_financial_output(financial_data, sector)
+        audit.validation_result("analyze_financial", len(val_failures) == 0, val_failures)
+        # Append validation failures as warnings (non-fatal — assembler handles missing data)
+        for vf in val_failures:
+            validation_warnings.append(f"[validation] {vf}")
+
+        # Checkpoint: save years + key numbers for partial re-run
+        years_summary = {
+            str(yr): {
+                "total_assets": getattr(statements.get(yr), "total_assets", None),
+                "net_revenue": getattr(statements.get(yr), "net_revenue", None),
+            }
+            for yr in sorted(statements.keys())
+        }
+        save_node_checkpoint(run_id, "02_financial_data", {"years": years_summary})
+        audit.tool_call("save_node_checkpoint", node="02_financial_data", run_id=run_id)
 
         # Step 5: Generate LLM financial analysis (with quality_feedback on retry)
         quality_feedback = state.get("quality_feedback")

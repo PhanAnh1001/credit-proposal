@@ -5,6 +5,9 @@ from .financial import FinancialData
 
 
 class AgentState(TypedDict):
+    # ── Run identity ─────────────────────────────────────────────────────────
+    run_id: str        # UUID4 assigned at pipeline start; groups all audit events
+
     # ── Input ────────────────────────────────────────────────────────────────
     company: str       # company code / folder name, e.g. "mst"
     company_name: str
@@ -33,6 +36,11 @@ class AgentState(TypedDict):
     quality_review_result: Optional[dict]  # {score, completeness, sector_quality,
                                            #  financial_quality, issues, summary}
     quality_feedback: Optional[str]      # Concrete improvement hints for retry nodes
+
+    # ── Verification & escalation ────────────────────────────────────────────
+    claim_verifications: Optional[list]  # list[ClaimVerification] as dicts
+    verification_summary: Optional[dict] # {layers_run, total_claims, low_confidence_count}
+    escalation_report: Optional[str]     # Markdown escalation report for human review
 
     # ── Control flow ─────────────────────────────────────────────────────────
     # Annotated with `add` reducer so parallel branches safely append errors/messages

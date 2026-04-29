@@ -3,9 +3,12 @@ import os
 from pathlib import Path
 from datetime import datetime
 from ..models.state import AgentState
+from ..models.verification import ClaimVerification, VerificationSummary
 from ..utils.llm import get_judge_llm, strip_llm_json, invoke_with_retry
 from ..utils.docx_template import render_analyst_memo, render_from_template
 from ..utils.logger import get_logger, timed_node
+from ..utils.audit import get_audit_logger
+from ..tools.multi_layer_verifier import run_all_layers
 from ..config import get_output_dir as _default_output_dir
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -82,11 +85,21 @@ def assemble_report_node(state: AgentState) -> dict:
         logger.error(f"Analyst memo DOCX failed: {e}", exc_info=True)
         memo_docx_path = None
 
+    # Multi-layer verification: run all 4 layers on assembled report + data
+    verifier_result = run_all_layers(dict(state))
+    ver_summary = verifier_result.get("verification_summary", {})
+    logger.info(
+        f"Multi-layer verifier: {ver_summary.get('passed', '?')}/{ver_summary.get('total_checks', '?')} pass  "
+        f"errors={ver_summary.get('errors', 0)}  warns={ver_summary.get('warnings', 0)}"
+    )
+
     return {
         "final_report_md": full_report,
         "final_report_docx_path": docx_path,
         "final_report_memo_docx_path": memo_docx_path,
-        "current_step": "completed"
+        "current_step": "completed",
+        "verification_summary": ver_summary,
+        "errors": verifier_result.get("errors", []),
     }
 
 
@@ -138,11 +151,16 @@ Trả về JSON thuần (không markdown):
 }
 """),
         HumanMessage(content=(
+            # Sampling windows are sized to guarantee the judge sees the key content:
+            # S1 [:2000]: captures through shareholders table (~1700 chars in)
+            # S2 [:3000]: captures through risk analysis section (~2000 chars in)
+            # S3 [:3000]: captures full ratio table + narrative (~1700-2800 chars in)
+            # Total ~8000 chars ≈ 5300 tokens; stays within gpt-oss-20b 8K context
             "Tờ trình phân tích tín dụng (trích đại diện từng phần):\n\n"
             + "\n\n".join([
-                (state.get("section_1_company") or "")[:1500],
-                (state.get("section_2_sector")  or "")[:1500],
-                (state.get("section_3_financial") or "")[:2000],
+                (state.get("section_1_company") or "")[:2000],
+                (state.get("section_2_sector")  or "")[:3000],
+                (state.get("section_3_financial") or "")[:3000],
             ])
         ))
     ]
@@ -173,21 +191,56 @@ Trả về JSON thuần (không markdown):
                 logger.warning(f"  Issue: {issue}")
 
         # Build actionable feedback for retry nodes.
-        # Identifies the weakest section and summarises the top issues into
-        # a single hint string that subgraph2/3 will inject into their prompts.
+        # Only pass issues relevant to the section being retried — sending
+        # "fix shareholders" to analyze_financial is useless and confuses the LLM.
         feedback: str | None = None
         retry_count = state.get("retry_count", 0)
         if score < 7 and retry_count == 0 and issues:
-            weak_section = "phân tích tài chính" if financial_q <= sector_q else "phân tích ngành"
-            top_issues = "; ".join(issues[:3])
+            if financial_q <= sector_q:
+                weak_section = "phân tích tài chính"
+                section_kw = ["tài chính", "financial", "ratio", "chỉ số", "bảng",
+                              "số liệu", "lợi nhuận", "doanh thu", "bctc", "thanh toán"]
+            else:
+                weak_section = "phân tích ngành"
+                section_kw = ["ngành", "sector", "rủi ro", "risk", "xu hướng",
+                              "cạnh tranh", "thị trường", "market"]
+            relevant = [i for i in issues if any(k in i.lower() for k in section_kw)]
+            top_issues = "; ".join((relevant or issues)[:3])
             feedback = f"Cải thiện {weak_section}. Vấn đề cần sửa: {top_issues}"
             logger.info(f"Quality feedback generated for retry: {feedback!r}")
+
+        # Claim-level verification: derive per-claim confidence from section scores
+        run_id = state.get("run_id", "unknown")
+        audit = get_audit_logger(run_id)
+        claim_verifications = _build_claim_verifications(
+            completeness, sector_q, financial_q, issues,
+            state.get("financial_data"), state.get("company_info"),
+        )
+        ver_summary = _build_verification_summary(claim_verifications)
+        audit.quality_decision(
+            score=score,
+            retry_triggered=(feedback is not None),
+            route="retry" if feedback else "end",
+            issues=issues,
+        )
+        audit.validation_result(
+            "quality_review",
+            passed=(score >= 7),
+            failures=issues,
+        )
+        logger.info(
+            f"Claim verifications: {ver_summary.total_claims} total  "
+            f"low_confidence={ver_summary.low_confidence_count}  "
+            f"needs_escalation={ver_summary.needs_escalation()}"
+        )
 
         return {
             "quality_review_result": review,
             "quality_feedback": feedback,
             "retry_count": retry_count + 1,
             "current_step": "review_done",
+            "claim_verifications": [c.to_dict() for c in claim_verifications],
+            "verification_summary": ver_summary.model_dump(),
         }
     except Exception as e:
         logger.error(f"Quality review failed: {e}", exc_info=True)
@@ -195,6 +248,102 @@ Trả về JSON thuần (không markdown):
             "retry_count": state.get("retry_count", 0) + 1,
             "current_step": "review_done",
         }
+
+
+def _build_claim_verifications(
+    completeness: float,
+    sector_q: float,
+    financial_q: float,
+    issues: list[str],
+    financial_data=None,
+    company_info=None,
+) -> list[ClaimVerification]:
+    """Derive per-claim verifications from section scores and known data.
+
+    This is a structured interpretation of the LLM judge scores — each score
+    becomes a typed claim with confidence derived from the 0-10 scale.
+    We also add deterministic checks (e.g. balance sheet fields present).
+    """
+    claims: list[ClaimVerification] = []
+
+    def score_to_confidence(score: float) -> float:
+        return round(min(max(score / 10.0, 0.0), 1.0), 2)
+
+    # Output 1: company info completeness claim
+    claims.append(ClaimVerification(
+        claim_text="Thông tin khách hàng đầy đủ (tên, MST, địa chỉ, cổ đông, đại diện pháp luật)",
+        claim_type="completeness",
+        confidence=score_to_confidence(completeness),
+        source_reference="MD company info file",
+        verified=(completeness >= 7),
+        issues=[i for i in issues if any(k in i.lower() for k in ["thông tin", "mst", "cổ đông", "completeness"])],
+    ))
+
+    # Output 2: sector analysis claim
+    claims.append(ClaimVerification(
+        claim_text="Phân tích lĩnh vực kinh doanh có đủ nội dung và rủi ro ngành",
+        claim_type="sector_claim",
+        confidence=score_to_confidence(sector_q),
+        source_reference="Web search / LLM knowledge",
+        verified=(sector_q >= 7),
+        issues=[i for i in issues if any(k in i.lower() for k in ["ngành", "sector", "rủi ro", "risk"])],
+    ))
+
+    # Output 3: financial analysis claim
+    claims.append(ClaimVerification(
+        claim_text="Phân tích tài chính có số liệu BCTC và chỉ số tài chính hợp lý",
+        claim_type="financial_fact",
+        confidence=score_to_confidence(financial_q),
+        source_reference="PDF financial statements",
+        verified=(financial_q >= 7),
+        issues=[i for i in issues if any(k in i.lower() for k in ["tài chính", "financial", "ratio", "chỉ số"])],
+    ))
+
+    # Deterministic claim: balance sheet data present
+    if financial_data is not None:
+        statements = getattr(financial_data, "statements", {}) or {}
+        has_assets = any(
+            getattr(s, "total_assets", None) and getattr(s, "total_assets") > 0
+            for s in statements.values()
+        )
+        claims.append(ClaimVerification(
+            claim_text="Bảng cân đối kế toán có giá trị total_assets > 0",
+            claim_type="financial_fact",
+            confidence=0.95 if has_assets else 0.1,
+            source_reference="Extracted from PDF via OCR",
+            verified=has_assets,
+            issues=[] if has_assets else ["total_assets = 0 or None across all years"],
+        ))
+
+    # Deterministic claim: company name present
+    if company_info is not None:
+        has_name = bool(getattr(company_info, "company_name", None))
+        claims.append(ClaimVerification(
+            claim_text="Tên công ty được xác định",
+            claim_type="completeness",
+            confidence=0.95 if has_name else 0.1,
+            source_reference="MD company info file",
+            verified=has_name,
+            issues=[] if has_name else ["company_name is empty after extraction"],
+        ))
+
+    return claims
+
+
+def _build_verification_summary(claims: list[ClaimVerification]) -> VerificationSummary:
+    total = len(claims)
+    verified = sum(1 for c in claims if c.verified)
+    low_conf = sum(1 for c in claims if c.confidence < 0.5)
+    unverified = total - verified
+    avg_conf = sum(c.confidence for c in claims) / total if total > 0 else 0.0
+    return VerificationSummary(
+        layers_run=["llm_judge", "deterministic"],
+        total_claims=total,
+        verified_count=verified,
+        low_confidence_count=low_conf,
+        unverified_count=unverified,
+        overall_confidence=round(avg_conf, 2),
+    )
 
 
 def _build_report_header(company_name: str, date: str) -> str:

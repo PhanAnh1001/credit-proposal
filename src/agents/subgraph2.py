@@ -1,8 +1,13 @@
 from ..tools.web_search import web_search_industry
 from ..models.state import AgentState
 from ..utils.logger import get_logger, timed_node
+from ..utils.circuit_breaker import CircuitBreaker
+from ..utils.checkpoint import save_node_checkpoint
+from ..utils.validation import validate_sector_output
+from ..utils.audit import get_audit_logger
 
 logger = get_logger("subgraph2")
+_breaker = CircuitBreaker()
 
 
 @timed_node("analyze_sector")
@@ -32,6 +37,29 @@ def analyze_sector_node(state: AgentState) -> dict:
         logger.info(f"Sector analysis complete — {len(sector_analysis)} chars")
 
         section_md = "# Phụ lục A: Thông tin lĩnh vực kinh doanh\n\n" + sector_analysis
+
+        # Circuit breaker: sector text too short = silent synthesis failure
+        run_id = state.get("run_id", "unknown")
+        audit = get_audit_logger(run_id)
+        cb_result = _breaker.check_sector(section_md)
+        if cb_result.tripped:
+            audit.circuit_breaker_trip("analyze_sector", cb_result.reason)
+            return {
+                "errors": [f"[circuit_breaker] {cb_result.reason}"],
+                "current_step": "circuit_breaker_trip"
+            }
+
+        # Cross-agent validation gate
+        val_failures = validate_sector_output(section_md)
+        audit.validation_result("analyze_sector", len(val_failures) == 0, val_failures)
+
+        # Checkpoint: sector analysis summary for partial re-run
+        save_node_checkpoint(run_id, "03_sector", {
+            "industry": industry,
+            "section_length": len(section_md),
+            "validation_pass": len(val_failures) == 0,
+        })
+        audit.tool_call("save_node_checkpoint", node="03_sector", run_id=run_id)
 
         return {
             "sector_info": {"analysis": sector_analysis, "industry": industry},

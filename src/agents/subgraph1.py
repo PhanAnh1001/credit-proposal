@@ -2,8 +2,13 @@ from ..tools.company_info import read_md_company_info
 from ..models.state import AgentState
 from ..models.company import CompanyInfo
 from ..utils.logger import get_logger, timed_node
+from ..utils.circuit_breaker import CircuitBreaker
+from ..utils.checkpoint import save_node_checkpoint
+from ..utils.audit import get_audit_logger
+from ..utils.validation import validate_company_info
 
 logger = get_logger("subgraph1")
+_breaker = CircuitBreaker()
 
 
 @timed_node("extract_company_info")
@@ -24,10 +29,37 @@ def extract_company_info_node(state: AgentState) -> dict:
         section_md = _build_company_section(company_info)
         logger.debug(f"Section 1 built — {len(section_md)} chars")
 
+        # Circuit breaker: check critical fields before downstream nodes consume this
+        cb_result = _breaker.check_company_info(company_info)
+        run_id = state.get("run_id", "unknown")
+        audit = get_audit_logger(run_id)
+
+        if cb_result.tripped:
+            audit.circuit_breaker_trip("extract_company_info", cb_result.reason)
+            return {
+                "errors": [f"[circuit_breaker] {cb_result.reason}"],
+                "current_step": "circuit_breaker_trip"
+            }
+        if cb_result.warnings:
+            audit.circuit_breaker_warn("extract_company_info", cb_result.warnings)
+
+        # Cross-agent validation gate
+        val_failures = validate_company_info(company_info)
+        audit.validation_result("extract_company_info", len(val_failures) == 0, val_failures)
+
+        # Checkpoint: save company_info so it can be reused on partial re-run
+        save_node_checkpoint(run_id, "01_company_info", {
+            "company_name": company_info.company_name,
+            "tax_code": company_info.tax_code,
+            "main_business": company_info.main_business,
+        })
+        audit.tool_call("save_node_checkpoint", node="01_company_info", run_id=run_id)
+
         return {
             "company_info": company_info,
             "section_1_company": section_md,
-            "current_step": "company_info_done"
+            "current_step": "company_info_done",
+            "errors": [f"[circuit_breaker][warn] {w}" for w in cb_result.warnings],
         }
     except Exception as e:
         error_msg = f"Error in extract_company_info_node: {e}"
