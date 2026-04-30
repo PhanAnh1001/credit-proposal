@@ -5,11 +5,12 @@ from datetime import datetime
 from ..models.state import AgentState
 from ..models.verification import ClaimVerification, VerificationSummary
 from ..utils.llm import get_judge_llm, strip_llm_json, invoke_with_retry
-from ..utils.docx_template import render_analyst_memo, render_from_template
+from ..utils.docx_template import render_analyst_memo
 from ..utils.logger import get_logger, timed_node
 from ..utils.audit import get_audit_logger
 from ..tools.multi_layer_verifier import run_all_layers
-from ..config import get_output_dir as _default_output_dir
+from ..config import get_output_dir as _default_output_dir, DEFAULT_BANK
+from ..banks import get_renderer
 from langchain_core.messages import HumanMessage, SystemMessage
 
 logger = get_logger("assembler")
@@ -49,7 +50,8 @@ def assemble_report_node(state: AgentState) -> dict:
 
     # Save markdown
     company = state.get('company', 'unknown')
-    output_dir = state.get('output_dir') or str(_default_output_dir(company))
+    bank = state.get('bank') or DEFAULT_BANK
+    output_dir = state.get('output_dir') or str(_default_output_dir(bank, company))
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # Markdown = full analyst memo (all 3 outputs) — same content as credit-analyst-memo.docx
@@ -58,10 +60,10 @@ def assemble_report_node(state: AgentState) -> dict:
         f.write(full_report)
     logger.info(f"Markdown saved → {md_path}")
 
-    # Output 1 DOCX: fill VPBank form template with company info + financial numbers
+    # Output 1 DOCX: fill bank form template with company info + financial numbers
     docx_path = os.path.join(output_dir, 'credit-proposal.docx')
     try:
-        render_from_template(
+        get_renderer(bank).render(
             output_path=docx_path,
             company_info=company_info,
             financial_data=state.get('financial_data'),

@@ -13,7 +13,7 @@ class TestAgentStateStructure:
         from src.models.state import AgentState
         hints = AgentState.__annotations__
         required = [
-            "company", "company_name", "md_company_info_path", "pdf_dir_path",
+            "bank", "company", "company_name", "md_company_info_path", "pdf_dir_path",
             "output_dir", "company_info", "financial_data", "sector_info",
             "section_1_company", "section_2_sector", "section_3_financial",
             "final_report_md", "final_report_docx_path",

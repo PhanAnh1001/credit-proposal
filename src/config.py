@@ -5,17 +5,19 @@ Storage layout (local filesystem default):
     data/
     ├── uploads/          company input files (PDF + MD), switchable to S3
     │   └── {company}/
-    │       ├── financial_statements/pdf/{year}/
-    │       └── general_information/md/
+    │       ├── financial-statements/pdf/{year}/
+    │       └── general-information/md/
     ├── outputs/          AI agent output files
-    │   └── {company}/
+    │   └── {bank}/
+    │       └── {company}/
     ├── cache/
     │   └── ocr/          OCR result cache
     │       └── {company}/{year}/{strategy}/{YYYYMMDD}_vN/
     └── templates/        reference form templates (static assets)
-        ├── docx/
-        ├── md/
-        └── pdf/
+        └── {bank}/
+            ├── docx/
+            ├── md/
+            └── pdf/
 
 To override the data root set DATA_DIR in .env, e.g. DATA_DIR=/mnt/efs/data.
 To switch to S3 set STORAGE_BACKEND=s3 (see s3 vars below).
@@ -47,11 +49,35 @@ OCR_CACHE_DIR = DATA_DIR / "cache" / "ocr" # OCR result cache
 TEMPLATES_DIR = DATA_DIR / "templates"     # reference form templates
 
 # ---------------------------------------------------------------------------
-# Template file paths
+# Bank defaults & template basename
 # ---------------------------------------------------------------------------
 
-FORM_TEMPLATE_DOCX = TEMPLATES_DIR / "docx" / "giay-de-nghi-vay-von.docx"
-FORM_TEMPLATE_MD   = TEMPLATES_DIR / "md"   / "giay-de-nghi-vay-von.md"
+DEFAULT_BANK: str = "vpbank"
+FORM_TEMPLATE_BASENAME: str = "giay-de-nghi-vay-von"
+
+# ---------------------------------------------------------------------------
+# Bank-scoped path helpers
+# ---------------------------------------------------------------------------
+
+def get_bank_templates_dir(bank: str) -> Path:
+    """Root template directory for a bank, e.g. data/templates/vpbank/."""
+    return TEMPLATES_DIR / bank
+
+
+def get_form_template_docx(bank: str) -> Path:
+    """DOCX form template path for a bank."""
+    return get_bank_templates_dir(bank) / "docx" / f"{FORM_TEMPLATE_BASENAME}.docx"
+
+
+def get_form_template_md(bank: str) -> Path:
+    """Markdown form template path for a bank."""
+    return get_bank_templates_dir(bank) / "md" / f"{FORM_TEMPLATE_BASENAME}.md"
+
+
+def get_form_template_pdf(bank: str) -> Path:
+    """PDF form template path for a bank."""
+    return get_bank_templates_dir(bank) / "pdf" / f"{FORM_TEMPLATE_BASENAME}.pdf"
+
 
 # ---------------------------------------------------------------------------
 # Company path helpers
@@ -64,22 +90,22 @@ def get_company_upload_dir(company: str) -> Path:
 
 def get_financial_statements_dir(company: str) -> Path:
     """PDF directory for a company's financial statements."""
-    return get_company_upload_dir(company) / "financial_statements" / "pdf"
+    return get_company_upload_dir(company) / "financial-statements" / "pdf"
 
 
 def get_general_info_path(company: str) -> Path:
     """Markdown general-information file for a company."""
     return (
         get_company_upload_dir(company)
-        / "general_information"
+        / "general-information"
         / "md"
         / f"{company}-information.md"
     )
 
 
-def get_output_dir(company: str) -> Path:
-    """Output directory for a company's generated reports."""
-    return OUTPUTS_DIR / company
+def get_output_dir(bank: str, company: str) -> Path:
+    """Output directory for a bank+company combination, e.g. data/outputs/vpbank/mst/."""
+    return OUTPUTS_DIR / bank / company
 
 
 # ---------------------------------------------------------------------------

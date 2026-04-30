@@ -13,5 +13,9 @@ logs/
 data/cache/
 data/outputs/
 data/checkpoints/
-ete-evidence/*
+ete-evidence/**
 !ete-evidence/.gitkeep
+!ete-evidence/vpbank/
+!ete-evidence/vpbank/mst/
+!ete-evidence/vpbank/mst/.gitkeep
+!ete-evidence/vpbank/mst/README.md

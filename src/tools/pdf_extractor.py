@@ -86,6 +86,14 @@ _NUMERIC_FIELDS = [
     "operating_cash_flow", "investing_cash_flow", "financing_cash_flow",
 ]
 
+# Income statement fields — used for cross-field unit mismatch detection
+_INCOME_STATEMENT_FIELDS = [
+    "net_revenue", "gross_profit", "operating_profit",
+    "profit_before_tax", "net_profit", "cost_of_goods_sold",
+    "selling_expenses", "admin_expenses",
+    "operating_cash_flow", "investing_cash_flow", "financing_cash_flow",
+]
+
 # If total_assets exceeds this threshold (in triệu đồng), it must be raw VND.
 # Vietnam's largest companies top out around 5e8 triệu đồng; 1e10 is safely impossible.
 _UNIT_ANOMALY_THRESHOLD = 1e10
@@ -793,6 +801,20 @@ def _normalize_units(d: dict, year: int) -> dict:
         for k in _NUMERIC_FIELDS:
             if d.get(k) is not None:
                 d[k] = round(d[k] / 1_000_000, 3)
+    else:
+        # Cross-field mismatch: balance sheet already in triệu đồng but income
+        # statement returned in raw VND (Stage2 LLM inconsistency).
+        # Heuristic: net_revenue > total_assets * 1000 is physically impossible
+        # in the same unit — income statement must be raw VND.
+        nr = d.get("net_revenue")
+        if ta is not None and nr is not None and ta > 0 and abs(nr) > abs(ta) * 1000:
+            logger.info(
+                f"year={year}: net_revenue={nr:.3e} >> total_assets={ta:.3e} — "
+                f"income statement likely raw VND, dividing income fields by 1,000,000"
+            )
+            for k in _INCOME_STATEMENT_FIELDS:
+                if d.get(k) is not None:
+                    d[k] = round(d[k] / 1_000_000, 3)
     return d
 
 

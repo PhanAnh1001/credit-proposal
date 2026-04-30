@@ -5,6 +5,7 @@ Credit Proposal AI Agent - Main Entry Point
 Usage:
     python -m src.main
     python -m src.main --company mst
+    python -m src.main --bank vpbank --company mst
 """
 import argparse
 import sys
@@ -14,11 +15,18 @@ from dotenv import load_dotenv
 # Load environment variables before importing config (config reads env vars at import time)
 load_dotenv(".env")
 
-from src.config import UPLOADS_DIR, get_financial_statements_dir, get_general_info_path, get_output_dir  # noqa: E402
+from src.config import UPLOADS_DIR, DEFAULT_BANK, get_financial_statements_dir, get_general_info_path, get_output_dir  # noqa: E402
+from src.banks import validate_bank, UnsupportedBankError  # noqa: E402
 
 
 def main():
     parser = argparse.ArgumentParser(description='Credit Proposal AI Agent')
+    parser.add_argument(
+        '--bank',
+        type=str,
+        default=None,
+        help=f'Bank code (default: {DEFAULT_BANK}). Supported banks: vpbank'
+    )
     parser.add_argument(
         '--company',
         type=str,
@@ -41,10 +49,16 @@ def main():
         '--output-dir',
         type=str,
         default=None,
-        help='Output directory (default: data/outputs/<company>)'
+        help='Output directory (default: data/outputs/<bank>/<company>)'
     )
 
     args = parser.parse_args()
+
+    try:
+        bank = validate_bank(args.bank or DEFAULT_BANK)
+    except UnsupportedBankError as e:
+        print(f"ERROR: {e}")
+        sys.exit(2)
 
     company = args.company.lower()
 
@@ -56,7 +70,7 @@ def main():
         md_path = str(get_general_info_path(company))
         pdf_dir = str(get_financial_statements_dir(company))
 
-    output_dir = args.output_dir or str(get_output_dir(company))
+    output_dir = args.output_dir or str(get_output_dir(bank, company))
 
     # Validate inputs
     if not Path(md_path).exists():
@@ -67,6 +81,7 @@ def main():
         print(f"ERROR: PDF directory not found: {pdf_dir}")
         sys.exit(1)
 
+    print(f"Bank:    {bank}")
     print(f"Company: {args.company_name}")
     print(f"MD file: {md_path}")
     print(f"PDF dir: {pdf_dir}")
@@ -77,6 +92,7 @@ def main():
     from src.agents.graph import run_credit_proposal
 
     result = run_credit_proposal(
+        bank=bank,
         company=company,
         company_name=args.company_name,
         md_company_info_path=md_path,

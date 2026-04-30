@@ -10,6 +10,7 @@ from ..utils.logger import get_logger, setup_langsmith_tracing
 from ..utils.audit import get_audit_logger
 from ..utils.checkpoint import save_run_meta, save_node_checkpoint
 from ..config import get_output_dir as _default_output_dir
+from ..banks import validate_bank
 
 logger = get_logger("graph")
 
@@ -232,6 +233,7 @@ def build_credit_proposal_graph():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_credit_proposal(
+    bank: str,
     company_name: str,
     md_company_info_path: str,
     pdf_dir_path: str,
@@ -241,6 +243,7 @@ def run_credit_proposal(
     """Run the credit proposal agent end-to-end.
 
     Args:
+        bank:                  Bank code, e.g. "vpbank". Validated early via validate_bank().
         company_name:          Display name of the company.
         md_company_info_path:  Path to markdown company info file.
         pdf_dir_path:          Directory containing 2022/2023/2024 PDF subdirs.
@@ -250,11 +253,13 @@ def run_credit_proposal(
     Returns:
         Final state dict with all results.
     """
+    bank = validate_bank(bank)
+
     setup_langsmith_tracing()
 
     graph = build_credit_proposal_graph()
 
-    resolved_output_dir = output_dir or str(_default_output_dir(company))
+    resolved_output_dir = output_dir or str(_default_output_dir(bank, company))
 
     run_id = str(uuid.uuid4())
     audit = get_audit_logger(run_id)
@@ -265,6 +270,7 @@ def run_credit_proposal(
         # ── Run identity ──────────────────────────────────────────────────
         "run_id":                   run_id,
         # ── Input ─────────────────────────────────────────────────────────
+        "bank":                     bank,
         "company":                  company,
         "company_name":             company_name,
         "md_company_info_path":     md_company_info_path,
@@ -297,7 +303,7 @@ def run_credit_proposal(
     }
 
     logger.info(f"{'='*55}")
-    logger.info(f"Starting credit proposal — run_id={run_id}  company='{company}'  name='{company_name}'")
+    logger.info(f"Starting credit proposal — run_id={run_id}  bank='{bank}'  company='{company}'  name='{company_name}'")
     logger.info(f"  md_path  : {md_company_info_path}")
     logger.info(f"  pdf_dir  : {pdf_dir_path}")
     logger.info(f"  output   : {output_dir}")

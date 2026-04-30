@@ -54,7 +54,7 @@ OCR_ONLINE_DISABLED=false                # set true to skip Vision LLM OCR
 
 ## Usage
 
-### Basic run (MST company)
+### Basic run (MST company, VPBank)
 
 ```bash
 python -m src.main
@@ -64,15 +64,25 @@ python -m src.main
 
 ```bash
 python -m src.main \
+  --bank vpbank \
   --company mst \
   --company-name "Cong ty Co phan Xay dung MST" \
   --base-dir data/uploads \
-  --output-dir data/outputs/mst
+  --output-dir data/outputs/vpbank/mst
 ```
+
+**Arguments:**
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--bank` | `vpbank` | Bank code. Supported: `vpbank` |
+| `--company` | `mst` | Company code |
+| `--company-name` | `Công ty Cổ phần Xây dựng MST` | Full company name |
+| `--base-dir` | `data/uploads` | Input files root directory |
+| `--output-dir` | `data/outputs/<bank>/<company>` | Output directory |
 
 ### Output
 
-After running, outputs are saved to `data/outputs/mst/`:
+After running, outputs are saved to `data/outputs/vpbank/mst/`:
 - `credit-proposal.docx` — Credit application form (Output 1)
 - `credit-analyst-memo.docx` — Internal credit analyst memo (Output 2+3)
 - `credit-analyst-memo.md` — Full Markdown content
@@ -89,6 +99,10 @@ credit-proposal/
 │   │   ├── subgraph2.py      # Sector analysis node
 │   │   ├── subgraph3.py      # Financial analysis node
 │   │   └── assembler.py      # Report assembly + quality review nodes
+│   ├── banks/
+│   │   ├── __init__.py       # Bank registry: SUPPORTED_BANKS, validate_bank(), get_renderer()
+│   │   └── vpbank/
+│   │       └── renderer.py   # VPBank form renderer — fills giay-de-nghi-vay-von.docx
 │   ├── tools/
 │   │   ├── company_info.py   # read_md_company_info tool
 │   │   ├── pdf_extractor.py  # extract_pdf_financial_tables tool
@@ -112,15 +126,16 @@ credit-proposal/
 │   │   ├── circuit_breaker.py # Per-subgraph abort checks
 │   │   ├── validation.py     # Cross-agent validation gates (pure Python)
 │   │   ├── ocr_cache.py      # OCR result cache (file-based)
-│   │   ├── docx_template.py  # DOCX template renderer
+│   │   ├── docx_template.py  # DOCX template shared helpers
 │   │   └── docx_converter.py # Markdown → DOCX converter
 │   └── main.py               # CLI entry point
 ├── data/                      # Runtime data (gitignored except uploads + templates)
 │   ├── uploads/{company}/     # Input files: general-information/md + financial-statements/pdf
-│   ├── outputs/{company}/     # AI agent outputs (gitignored)
+│   ├── outputs/{bank}/{company}/ # AI agent outputs (gitignored)
 │   ├── cache/ocr/             # OCR result cache (gitignored)
 │   ├── checkpoints/           # Per-run node checkpoints (gitignored)
-│   └── templates/             # Reference form templates (docx/md/pdf)
+│   └── templates/{bank}/      # Bank-specific form templates (docx/md/pdf)
+├── ete-evidence/              # End-to-end run artifacts (screenshots, output samples)
 ├── docs/
 │   ├── design/                # Agent design document
 │   └── testing/               # Step-by-step test guides (01–06)
@@ -168,7 +183,7 @@ If the overall score is below 7, `route_after_review()` re-runs the weakest node
 
 `AgentState` TypedDict serves as short-term memory within a single session:
 - **Run identity**: `run_id` (UUID4) — groups all audit events and checkpoints
-- **Input**: `company_name`, `md_company_info_path`, `pdf_dir_path`, `output_dir`
+- **Input**: `bank`, `company_name`, `md_company_info_path`, `pdf_dir_path`, `output_dir`
 - **Intermediate**: `company_info`, `sector_info`, `financial_data`
 - **Sections**: `section_1_company`, `section_2_sector`, `section_3_financial`
 - **Output**: `final_report_md`, `final_report_docx_path`, `final_report_memo_docx_path`

@@ -9,6 +9,7 @@ class AgentState(TypedDict):
     run_id: str        # UUID4 assigned at pipeline start; groups all audit events
 
     # ── Input ────────────────────────────────────────────────────────────────
+    bank: str          # bank code, e.g. "vpbank"
     company: str       # company code / folder name, e.g. "mst"
     company_name: str
     md_company_info_path: str
@@ -27,7 +28,7 @@ class AgentState(TypedDict):
 
     # ── Final output ─────────────────────────────────────────────────────────
     final_report_md: Optional[str]
-    final_report_docx_path: Optional[str]       # VPBank form template (Output 1)
+    final_report_docx_path: Optional[str]       # Bank form template (Output 1)
     final_report_memo_docx_path: Optional[str]  # analyst memo DOCX (Output 2+3)
 
     # ── Quality feedback loop ────────────────────────────────────────────────
